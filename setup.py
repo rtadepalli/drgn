@@ -172,8 +172,6 @@ class test(Command):
 
     def finalize_options(self):
         self.kernels = [kernel for kernel in self.extra_kernels.split(",") if kernel]
-        if self.kernel:
-            self.kernels.extend(kernel + ".*" for kernel in test.KERNELS)
         if self.vmtest_dir is None:
             build_base = self.get_finalized_command("build").build_base
             self.vmtest_dir = os.path.join(build_base, "vmtest")
@@ -231,13 +229,22 @@ fi
         from pathlib import Path
 
         from vmtest.download import download_kernels_in_thread
+        from vmtest.kbuild import KERNEL_FLAVORS
+
+        kernels = self.kernels
+        if self.kernel:
+            kernels += [
+                f"{kernel}.*{flavor.name}"
+                for kernel in test.KERNELS
+                for flavor in KERNEL_FLAVORS
+            ]
 
         # Start downloads ASAP so that they're hopefully done by the time we
         # need them.
         with download_kernels_in_thread(
-            Path(self.vmtest_dir), "x86_64", self.kernels
+            Path(self.vmtest_dir), "x86_64", kernels
         ) as kernel_downloads:
-            if self.kernels:
+            if kernels:
                 self.announce("downloading kernels in the background", log.INFO)
             self.run_command("egg_info")
             self.reinitialize_command("build_ext", inplace=1)
@@ -246,14 +253,14 @@ fi
             passed = []
             failed = []
 
-            if self.kernels:
+            if kernels:
                 self.announce("running tests locally", log.INFO)
             if self._run_local():
                 passed.append("local")
             else:
                 failed.append("local")
 
-            if self.kernels:
+            if kernels:
                 for kernel in kernel_downloads:
                     kernel_release, success = self._run_vm(kernel)
                     if success:
