@@ -676,7 +676,7 @@ struct kernel_module_section_iterator {
 	/* /sys/module/$module/sections directory or NULL. */
 	DIR *sections_dir;
 	/* If not using /sys/module/$module/sections. */
-	uint64_t i;
+	int64_t i;
 	uint64_t nsections;
 	char *name;
 };
@@ -703,7 +703,7 @@ kernel_module_section_iterator_init(struct kernel_module_section_iterator *it,
 		return NULL;
 	} else {
 		it->sections_dir = NULL;
-		it->i = 0;
+		it->i = -1;
 		it->name = NULL;
 		/* it->nsections = mod->sect_attrs->nsections */
 		err = drgn_object_member_dereference(&kmod_it->tmp1,
@@ -802,6 +802,29 @@ kernel_module_section_iterator_next(struct kernel_module_section_iterator *it,
 
 	struct drgn_error *err;
 	struct kernel_module_iterator *kmod_it = it->kmod_it;
+
+	if (it->i < 0) {
+		err = drgn_object_member_dereference(&kmod_it->tmp2,
+						     &kmod_it->mod,
+						     "percpu_size");
+		if (err)
+			return err;
+		uint64_t percpu_size;
+		err = drgn_object_read_unsigned(&kmod_it->tmp2, &percpu_size);
+		if (err)
+			return err;
+		it->i = 0;
+		if (percpu_size > 0) {
+			err = drgn_object_member_dereference(&kmod_it->tmp2,
+							     &kmod_it->mod,
+							     "percpu");
+			if (err)
+				return err;
+			*name_ret = ".data..percpu";
+			return drgn_object_read_unsigned(&kmod_it->tmp2,
+							 address_ret);
+		}
+	}
 
 	if (it->i >= it->nsections)
 		return &drgn_stop;
@@ -1390,7 +1413,6 @@ report_kernel_modules(struct drgn_debug_info_load_state *load,
 		      struct kernel_module_file *kmods, size_t num_kmods,
 		      bool vmlinux_is_pending)
 {
-	struct drgn_program *prog = load->dbinfo->prog;
 	struct drgn_error *err;
 
 	if (!num_kmods && !load->load_default)
@@ -1402,10 +1424,6 @@ report_kernel_modules(struct drgn_debug_info_load_state *load,
 	 * path can be disabled via an environment variable for testing.
 	 */
 	bool use_proc_and_sys = false;
-	if (prog->flags & DRGN_PROGRAM_IS_LIVE) {
-		char *env = getenv("DRGN_USE_PROC_AND_SYS_MODULES");
-		use_proc_and_sys = !env || atoi(env);
-	}
 	/*
 	 * If we're not using /proc and /sys, then we need to index vmlinux now
 	 * so that we can walk the list of modules in the kernel.
